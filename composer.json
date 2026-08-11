@@ -1,0 +1,27 @@
+{
+    "name": "myliberte/htmlpdf",
+    "description": "Dependency-free HTML/CSS to PDF renderer for myliberte",
+    "type": "library",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.1",
+        "ext-mbstring": "*",
+        "ext-dom": "*",
+        "ext-iconv": "*"
+    },
+    "autoload": {
+        "psr-4": {
+            "HtmlPdf\\": "src/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "HtmlPdf\\Laravel\\HtmlPdfServiceProvider"
+            ],
+            "aliases": {
+                "HtmlPdf": "HtmlPdf\\Laravel\\HtmlPdfFacade"
+            }
+        }
+    }
+}
