@@ -113,4 +113,24 @@ class ContentStream
     {
         return $this->buf;
     }
+
+    /** Current write position, used to splice content in before what's written after this point. */
+    public function mark(): int
+    {
+        return strlen($this->buf);
+    }
+
+    /** Insert raw PDF ops at a previously recorded position (used to draw box backgrounds behind their content). */
+    public function insertAt(int $pos, string $code): void
+    {
+        $this->buf = substr($this->buf, 0, $pos) . $code . substr($this->buf, $pos);
+    }
+
+    /** Call after insertAt() with color-changing ops, since the splice can leave the state cache stale. */
+    public function invalidateColorCache(): void
+    {
+        $this->currentFillColor = null;
+        $this->currentStrokeColor = null;
+        $this->currentLineWidth = null;
+    }
 }

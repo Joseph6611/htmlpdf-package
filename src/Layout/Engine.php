@@ -84,13 +84,13 @@ class Engine
                     $this->y += $child->style->fontSize * $child->style->lineHeight;
                     break;
                 default:
+                    $this->y += $child->style->marginTop;
                     if ($this->isInlineOnly($child)) {
-                        $this->layoutParagraphRun($this->flattenInline($child), $x, $width, $child->style);
+                        $this->layoutBoxedInline($child, $x, $width);
                     } else {
-                        $this->y += $child->style->marginTop;
                         $this->layoutBoxed($child, $x, $width);
-                        $this->y += $child->style->marginBottom;
                     }
+                    $this->y += $child->style->marginBottom;
             }
         }
     }
@@ -138,12 +138,110 @@ class Engine
         $boxTop = $this->y;
         $this->y += $style->paddingTop;
 
+        $streamBefore = $this->stream;
+        $mark = $streamBefore->mark();
+        $streamBefore->invalidateColorCache();
+
         $this->layoutBlockChildren($node, $innerX, $innerWidth);
 
         $this->y += $style->paddingBottom;
         $boxHeight = $this->y - $boxTop;
 
-        $this->drawBoxDecorations($style, $x, $boxTop, $width, $boxHeight);
+        $this->spliceBoxDecorations($style, $x, $boxTop, $width, $boxHeight, $streamBefore, $mark);
+    }
+
+    private function layoutBoxedInline(Node $node, float $x, float $width): void
+    {
+        $style = $node->style;
+        $innerWidth = $width - $style->paddingLeft - $style->paddingRight;
+        $innerX = $x + $style->paddingLeft;
+
+        $boxTop = $this->y;
+        $this->y += $style->paddingTop;
+
+        $streamBefore = $this->stream;
+        $mark = $streamBefore->mark();
+        $streamBefore->invalidateColorCache();
+
+        $this->layoutParagraphRun($this->flattenInline($node), $innerX, $innerWidth, $style);
+
+        $this->y += $style->paddingBottom;
+        $boxHeight = $this->y - $boxTop;
+
+        $this->spliceBoxDecorations($style, $x, $boxTop, $width, $boxHeight, $streamBefore, $mark);
+    }
+
+    /**
+     * Draw a box's background/border by splicing ops in at a position recorded
+     * before its content was laid out, so the background paints behind the
+     * text instead of over it. If a page break happened while laying out the
+     * content (stream identity changed), we skip decoration rather than draw
+     * it in the wrong place - boxes are expected to be short enough to avoid this.
+     */
+    private function spliceBoxDecorations(Style $style, float $x, float $topY, float $width, float $height, ContentStream $streamBefore, int $mark): void
+    {
+        if ($style->backgroundColor === null && !$this->hasBorder($style)) {
+            return;
+        }
+        if ($this->stream !== $streamBefore) {
+            return; // content spanned a page break; skip rather than misplace
+        }
+
+        $ops = '';
+        $pdfBottom = $this->pdfY($topY) - $height;
+
+        if ($style->backgroundColor !== null) {
+            [$r, $g, $b] = $style->backgroundColor;
+            $ops .= sprintf(
+                "%s %s %s rg\n%s %s %s %s re f\n",
+                $this->writer->fmt(max(0, min(255, $r)) / 255),
+                $this->writer->fmt(max(0, min(255, $g)) / 255),
+                $this->writer->fmt(max(0, min(255, $b)) / 255),
+                $this->writer->fmt($x),
+                $this->writer->fmt($pdfBottom),
+                $this->writer->fmt($width),
+                $this->writer->fmt($height)
+            );
+        }
+
+        if ($this->hasBorder($style)) {
+            $ops .= $this->buildBorderOps($style, $x, $topY, $width, $height);
+        }
+
+        $streamBefore->insertAt($mark, $ops);
+        $streamBefore->invalidateColorCache();
+    }
+
+    private function buildBorderOps(Style $style, float $x, float $topY, float $width, float $height): string
+    {
+        $bw = $style->borderWidth;
+        [$r, $g, $b] = $style->borderColor;
+        $top = $this->pdfY($topY);
+        $bottom = $top - $height;
+        $right = $x + $width;
+
+        $ops = sprintf(
+            "%s %s %s RG\n%s w\n",
+            $this->writer->fmt(max(0, min(255, $r)) / 255),
+            $this->writer->fmt(max(0, min(255, $g)) / 255),
+            $this->writer->fmt(max(0, min(255, $b)) / 255),
+            $this->writer->fmt($bw)
+        );
+
+        if ($style->borderTop) {
+            $ops .= sprintf("%s %s m %s %s l S\n", $this->writer->fmt($x), $this->writer->fmt($top), $this->writer->fmt($right), $this->writer->fmt($top));
+        }
+        if ($style->borderBottom) {
+            $ops .= sprintf("%s %s m %s %s l S\n", $this->writer->fmt($x), $this->writer->fmt($bottom), $this->writer->fmt($right), $this->writer->fmt($bottom));
+        }
+        if ($style->borderLeft) {
+            $ops .= sprintf("%s %s m %s %s l S\n", $this->writer->fmt($x), $this->writer->fmt($bottom), $this->writer->fmt($x), $this->writer->fmt($top));
+        }
+        if ($style->borderRight) {
+            $ops .= sprintf("%s %s m %s %s l S\n", $this->writer->fmt($right), $this->writer->fmt($bottom), $this->writer->fmt($right), $this->writer->fmt($top));
+        }
+
+        return $ops;
     }
 
     private function drawBoxDecorations(Style $style, float $x, float $topY, float $width, float $height): void
@@ -335,12 +433,16 @@ class Engine
         }
         $colCount = max(1, $colCount);
 
-        // Column widths: honor explicit widths on first-row cells, split the rest evenly.
+        // Column widths: honor explicit widths (points or %) on first-row cells, split the rest evenly.
         $colWidths = array_fill(0, $colCount, null);
         $ci = 0;
         foreach ($rows[0]->children as $cell) {
-            if ($cell->style->width !== null && $cell->colspan === 1 && $ci < $colCount) {
-                $colWidths[$ci] = $cell->style->width;
+            if ($ci < $colCount) {
+                if ($cell->style->widthPercent !== null && $cell->colspan === 1) {
+                    $colWidths[$ci] = $width * ($cell->style->widthPercent / 100);
+                } elseif ($cell->style->width !== null && $cell->colspan === 1) {
+                    $colWidths[$ci] = $cell->style->width;
+                }
             }
             $ci += $cell->colspan;
         }

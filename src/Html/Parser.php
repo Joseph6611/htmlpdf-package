@@ -164,7 +164,13 @@ class Parser
                     $style->lineHeight = is_numeric($val) ? (float) $val : $style->lineHeight;
                     break;
                 case 'width':
-                    $style->width = $this->toPt($val, 0) ?: null;
+                    if (preg_match('/^(-?[\d.]+)\s*%$/', trim($val), $m)) {
+                        $style->widthPercent = (float) $m[1];
+                        $style->width = null;
+                    } else {
+                        $style->width = $this->toPt($val, 0) ?: null;
+                        $style->widthPercent = null;
+                    }
                     break;
                 case 'margin':
                     [$style->marginTop, $style->marginRight, $style->marginBottom, $style->marginLeft] = $this->box($val, $style->fontSize);
@@ -181,8 +187,44 @@ class Parser
                 case 'padding-bottom': $style->paddingBottom = $this->toPt($val, $style->paddingBottom); break;
                 case 'padding-left': $style->paddingLeft = $this->toPt($val, $style->paddingLeft); break;
                 case 'border':
-                    $this->applyBorderShorthand($val, $style);
-                    $style->borderTop = $style->borderRight = $style->borderBottom = $style->borderLeft = true;
+                    if (strtolower(trim($val)) === 'none' || trim($val) === '0') {
+                        $style->borderTop = $style->borderRight = $style->borderBottom = $style->borderLeft = false;
+                    } else {
+                        $this->applyBorderShorthand($val, $style);
+                        $style->borderTop = $style->borderRight = $style->borderBottom = $style->borderLeft = true;
+                    }
+                    break;
+                case 'border-top':
+                    if (strtolower(trim($val)) === 'none' || trim($val) === '0') {
+                        $style->borderTop = false;
+                    } else {
+                        $this->applyBorderShorthand($val, $style);
+                        $style->borderTop = true;
+                    }
+                    break;
+                case 'border-right':
+                    if (strtolower(trim($val)) === 'none' || trim($val) === '0') {
+                        $style->borderRight = false;
+                    } else {
+                        $this->applyBorderShorthand($val, $style);
+                        $style->borderRight = true;
+                    }
+                    break;
+                case 'border-bottom':
+                    if (strtolower(trim($val)) === 'none' || trim($val) === '0') {
+                        $style->borderBottom = false;
+                    } else {
+                        $this->applyBorderShorthand($val, $style);
+                        $style->borderBottom = true;
+                    }
+                    break;
+                case 'border-left':
+                    if (strtolower(trim($val)) === 'none' || trim($val) === '0') {
+                        $style->borderLeft = false;
+                    } else {
+                        $this->applyBorderShorthand($val, $style);
+                        $style->borderLeft = true;
+                    }
                     break;
                 case 'border-width':
                     $style->borderWidth = $this->toPt($val, $style->borderWidth);

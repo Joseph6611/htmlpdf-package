@@ -31,6 +31,7 @@ class Style
     public float $borderWidth = 1.0;
 
     public ?float $width = null; // points, or null = auto
+    public ?float $widthPercent = null; // 0-100, resolved against container width at layout time
 
     public function clone(): self
     {
