@@ -62,10 +62,15 @@ class ContentStream
         );
     }
 
-    public function line(float $x1, float $y1, float $x2, float $y2, array $rgb = [0, 0, 0], float $lineWidth = 1.0): void
+    public function line(float $x1, float $y1, float $x2, float $y2, array $rgb = [0, 0, 0], float $lineWidth = 1.0, string $style = 'solid'): void
     {
         $this->setStrokeColor($rgb);
         $this->setLineWidth($lineWidth);
+        if ($style === 'dashed') {
+            $this->buf .= "[4 2] 0 d\n";
+        } elseif ($style === 'dotted') {
+            $this->buf .= "[1 1.5] 0 d\n";
+        }
         $this->buf .= sprintf(
             "%s %s m %s %s l S\n",
             $this->writer->fmt($x1),
@@ -73,6 +78,9 @@ class ContentStream
             $this->writer->fmt($x2),
             $this->writer->fmt($y2)
         );
+        if ($style !== 'solid') {
+            $this->buf .= "[] 0 d\n";
+        }
     }
 
     private function setFillColor(array $rgb): void

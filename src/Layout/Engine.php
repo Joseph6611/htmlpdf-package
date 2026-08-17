@@ -228,6 +228,17 @@ class Engine
             $this->writer->fmt($bw)
         );
 
+        $dashOn = '';
+        $dashOff = '';
+        if ($style->borderStyle === 'dashed') {
+            $dashOn = "[4 2] 0 d\n";
+            $dashOff = "[] 0 d\n";
+        } elseif ($style->borderStyle === 'dotted') {
+            $dashOn = "[1 1.5] 0 d\n";
+            $dashOff = "[] 0 d\n";
+        }
+        $ops .= $dashOn;
+
         if ($style->borderTop) {
             $ops .= sprintf("%s %s m %s %s l S\n", $this->writer->fmt($x), $this->writer->fmt($top), $this->writer->fmt($right), $this->writer->fmt($top));
         }
@@ -240,6 +251,7 @@ class Engine
         if ($style->borderRight) {
             $ops .= sprintf("%s %s m %s %s l S\n", $this->writer->fmt($right), $this->writer->fmt($bottom), $this->writer->fmt($right), $this->writer->fmt($top));
         }
+        $ops .= $dashOff;
 
         return $ops;
     }
@@ -265,21 +277,22 @@ class Engine
     {
         $bw = $style->borderWidth;
         $color = $style->borderColor;
+        $borderStyle = $style->borderStyle;
         $top = $this->pdfY($topY);
         $bottom = $top - $height;
         $right = $x + $width;
 
         if ($style->borderTop) {
-            $this->stream->line($x, $top, $right, $top, $color, $bw);
+            $this->stream->line($x, $top, $right, $top, $color, $bw, $borderStyle);
         }
         if ($style->borderBottom) {
-            $this->stream->line($x, $bottom, $right, $bottom, $color, $bw);
+            $this->stream->line($x, $bottom, $right, $bottom, $color, $bw, $borderStyle);
         }
         if ($style->borderLeft) {
-            $this->stream->line($x, $bottom, $x, $top, $color, $bw);
+            $this->stream->line($x, $bottom, $x, $top, $color, $bw, $borderStyle);
         }
         if ($style->borderRight) {
-            $this->stream->line($right, $bottom, $right, $top, $color, $bw);
+            $this->stream->line($right, $bottom, $right, $top, $color, $bw, $borderStyle);
         }
     }
 

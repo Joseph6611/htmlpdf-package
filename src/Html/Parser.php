@@ -238,12 +238,15 @@ class Parser
 
     private function applyBorderShorthand(string $val, Style $style): void
     {
-        // e.g. "1px solid #000000"
+        // e.g. "1px solid #000000" or "1px dashed #444"
         if (preg_match('/([\d.]+)(px|pt)?/', $val, $m)) {
             $style->borderWidth = $this->toPt($m[1] . ($m[2] ?? 'px'), 1);
         }
         if (preg_match('/#[0-9a-fA-F]{3,6}|rgb\([^)]+\)/', $val, $m)) {
             $style->borderColor = $this->toRgb($m[0]) ?? $style->borderColor;
+        }
+        if (preg_match('/\b(dashed|dotted|solid)\b/i', $val, $m)) {
+            $style->borderStyle = strtolower($m[1]);
         }
     }
 
