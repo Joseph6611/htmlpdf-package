@@ -2,7 +2,7 @@
     "name": "myliberte/htmlpdf",
     "description": "Dependency-free HTML/CSS to PDF renderer for myliberte",
     "type": "library",
-    "version": "1.0.2", 
+    "version": "1.0.3", 
     "license": "proprietary",
     "require": {
         "php": ">=8.1",
