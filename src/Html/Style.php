@@ -33,10 +33,27 @@ class Style
 
     public ?float $width = null; // points, or null = auto
     public ?float $widthPercent = null; // 0-100, resolved against container width at layout time
+    public ?float $height = null; // points, or null = auto (currently only used by <img>)
 
     public function clone(): self
     {
         return clone $this;
+    }
+
+    /**
+     * Reset the properties CSS does not inherit (box model, background, size).
+     * Used for replaced elements such as <img>, which must not pick up the
+     * width/padding/border of the block that contains them.
+     */
+    public function resetBox(): void
+    {
+        $this->width = null;
+        $this->widthPercent = null;
+        $this->height = null;
+        $this->backgroundColor = null;
+        $this->marginTop = $this->marginRight = $this->marginBottom = $this->marginLeft = 0;
+        $this->paddingTop = $this->paddingRight = $this->paddingBottom = $this->paddingLeft = 0;
+        $this->borderTop = $this->borderRight = $this->borderBottom = $this->borderLeft = false;
     }
 
     public function pdfFontName(): string

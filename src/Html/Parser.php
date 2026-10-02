@@ -84,6 +84,13 @@ class Parser
         // 1) Tag defaults
         $this->applyTagDefaults($tag, $style);
 
+        // 1b) <img>: start from a clean box, then honor width/height attributes
+        //     (CSS below still wins over them, as in browsers).
+        if ($tag === 'img') {
+            $style->resetBox();
+            $this->applyImgAttributes($el, $style);
+        }
+
         // 2) Stylesheet rules (in source order, ordered by specificity)
         $classAttr = $el->getAttribute('class');
         $idAttr = $el->getAttribute('id');
@@ -105,6 +112,23 @@ class Parser
         }
 
         return $style;
+    }
+
+    private function applyImgAttributes(DOMElement $el, Style $style): void
+    {
+        $w = trim($el->getAttribute('width'));
+        if (preg_match('/^([\d.]+)\s*(%|px)?$/i', $w, $m)) {
+            if (($m[2] ?? '') === '%') {
+                $style->widthPercent = (float) $m[1];
+            } else {
+                $style->width = (float) $m[1] * 0.75; // HTML attribute numbers are pixels
+            }
+        }
+
+        $h = trim($el->getAttribute('height'));
+        if (preg_match('/^([\d.]+)\s*(px)?$/i', $h, $m)) {
+            $style->height = (float) $m[1] * 0.75;
+        }
     }
 
     private function applyTagDefaults(string $tag, Style $style): void
@@ -171,6 +195,9 @@ class Parser
                         $style->width = $this->toPt($val, 0) ?: null;
                         $style->widthPercent = null;
                     }
+                    break;
+                case 'height':
+                    $style->height = str_contains($val, '%') ? null : ($this->toPt($val, 0) ?: null);
                     break;
                 case 'margin':
                     [$style->marginTop, $style->marginRight, $style->marginBottom, $style->marginLeft] = $this->box($val, $style->fontSize);

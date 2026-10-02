@@ -2,6 +2,8 @@
 
 namespace HtmlPdf\Pdf;
 
+use HtmlPdf\Image\Image;
+
 /**
  * Minimal, dependency-free PDF file writer.
  *
@@ -16,6 +18,8 @@ class Writer
     private array $pageIds = [];
     private array $fontIds = []; // fontName => objId
     private array $fontKeys = []; // fontName => /F1 style resource key
+    private array $imageKeys = []; // image hash => /Im1 style resource key
+    private array $imageIds = []; // /Im1 style resource key => objId
     private int $catalogId;
     private int $pagesId;
     private string $title = '';
@@ -59,6 +63,50 @@ class Writer
     }
 
     /**
+     * Register an image XObject (plus its soft mask, if it has transparency)
+     * and return its resource key. The same image is only embedded once.
+     */
+    public function imageResourceKey(Image $img): string
+    {
+        if (isset($this->imageKeys[$img->hash])) {
+            return $this->imageKeys[$img->hash];
+        }
+
+        $smaskId = null;
+        if ($img->smask !== null) {
+            $smaskId = $this->reserve();
+            $len = strlen($img->smask);
+            $this->set($smaskId, "<< /Type /XObject /Subtype /Image /Width {$img->width} /Height {$img->height} "
+                . "/ColorSpace /DeviceGray /BitsPerComponent 8 /Filter /FlateDecode /Length {$len} >>\n"
+                . "stream\n{$img->smask}\nendstream");
+        }
+
+        $id = $this->reserve();
+        $dict = "<< /Type /XObject /Subtype /Image /Width {$img->width} /Height {$img->height} "
+            . "/ColorSpace {$img->colorSpace} /BitsPerComponent {$img->bpc} /Filter /{$img->filter}";
+        if ($img->decodeParms !== null) {
+            $dict .= " /DecodeParms {$img->decodeParms}";
+        }
+        if ($img->decode !== null) {
+            $dict .= " /Decode {$img->decode}";
+        }
+        if ($img->colorKeyMask !== null) {
+            $dict .= ' /Mask [' . implode(' ', $img->colorKeyMask) . ']';
+        }
+        if ($smaskId !== null) {
+            $dict .= " /SMask {$smaskId} 0 R";
+        }
+        $len = strlen($img->data);
+        $this->set($id, "{$dict} /Length {$len} >>\nstream\n{$img->data}\nendstream");
+
+        $key = 'Im' . (count($this->imageKeys) + 1);
+        $this->imageKeys[$img->hash] = $key;
+        $this->imageIds[$key] = $id;
+
+        return $key;
+    }
+
+    /**
      * Add a page with a raw content stream (already-built PDF operators).
      */
     public function addPage(string $contentStream): int
@@ -87,7 +135,16 @@ class Writer
         }
         $fonts = implode(' ', $fontEntries);
 
-        return "<< /Font << {$fonts} >> >>";
+        $xobjects = '';
+        if ($this->imageIds) {
+            $entries = [];
+            foreach ($this->imageIds as $key => $id) {
+                $entries[] = "/{$key} {$id} 0 R";
+            }
+            $xobjects = ' /XObject << ' . implode(' ', $entries) . ' >>';
+        }
+
+        return "<< /Font << {$fonts} >>{$xobjects} >>";
     }
 
     public function fmt(float $n): string

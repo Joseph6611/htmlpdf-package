@@ -3,6 +3,7 @@
 namespace HtmlPdf\Layout;
 
 use HtmlPdf\Font\Metrics;
+use HtmlPdf\Image\ImageLoader;
 use HtmlPdf\Html\Node;
 use HtmlPdf\Html\Style;
 use HtmlPdf\Pdf\ContentStream;
@@ -23,6 +24,7 @@ class Engine
         private float $marginRight = 45,
         private float $marginBottom = 50,
         private float $marginLeft = 45,
+        private ?ImageLoader $images = null,
     ) {
     }
 
@@ -83,6 +85,9 @@ class Engine
                 case 'br':
                     $this->y += $child->style->fontSize * $child->style->lineHeight;
                     break;
+                case 'img':
+                    $this->layoutParagraphRun([$child], $x, $width);
+                    break;
                 default:
                     $this->y += $child->style->marginTop;
                     if ($this->isInlineOnly($child)) {
@@ -98,7 +103,7 @@ class Engine
     private function isInlineOnly(Node $node): bool
     {
         foreach ($node->children as $c) {
-            if (!$c->isText() && !in_array($c->tag, ['strong', 'b', 'em', 'i', 'span', 'br'], true)) {
+            if (!$c->isText() && !in_array($c->tag, ['strong', 'b', 'em', 'i', 'span', 'br', 'img'], true)) {
                 return false;
             }
         }
@@ -118,6 +123,8 @@ class Engine
             } elseif ($c->tag === 'br') {
                 $br = new Node('br', $node->style);
                 $runs[] = $br;
+            } elseif ($c->tag === 'img') {
+                $runs[] = $c; // atomic inline: kept as-is, sized at wrap time
             } else {
                 foreach ($this->flattenInline($c) as $sub) {
                     $runs[] = $sub;
@@ -312,7 +319,8 @@ class Engine
         $align = $blockStyle->textAlign ?? ($runs[0]->style->textAlign ?? 'left');
 
         foreach ($lines as $line) {
-            $this->ensureSpace($lineHeight);
+            $boxHeight = $this->lineBoxHeight($line, $lineHeight);
+            $this->ensureSpace($boxHeight);
             $lineWidth = array_sum(array_map(fn ($seg) => $seg['width'], $line));
             $startX = match ($align) {
                 'center' => $x + max(0, ($width - $lineWidth) / 2),
@@ -320,21 +328,112 @@ class Engine
                 default => $x,
             };
 
-            $cursor = $startX;
-            $baselineY = $this->pdfY($this->y + $lineHeight * 0.78);
-            foreach ($line as $seg) {
-                $fontKey = $this->writer->fontResourceKey($seg['font']);
-                $this->stream->text($cursor, $baselineY, $seg['text'], $fontKey, $seg['size'], $seg['color']);
-                $cursor += $seg['width'];
-            }
-            $this->y += $lineHeight;
+            $this->drawLine($line, $startX, $this->y, $boxHeight, $lineHeight);
+            $this->y += $boxHeight;
         }
+    }
+
+    /**
+     * Height of a laid-out line: the normal text line height, or taller when
+     * the line contains an image. Images sit on the text baseline, so the
+     * room below the baseline (the "descent") is always kept.
+     */
+    private function lineBoxHeight(array $line, float $baseHeight): float
+    {
+        $descent = $baseHeight * 0.22;
+        $height = $baseHeight;
+        foreach ($line as $seg) {
+            if (isset($seg['image'])) {
+                $height = max($height, $seg['imgH'] + $seg['mT'] + $seg['mB'] + $descent);
+            }
+        }
+        return $height;
+    }
+
+    /** Paint the segments (text and images) of one line whose box starts at $topY. */
+    private function drawLine(array $line, float $startX, float $topY, float $boxHeight, float $baseHeight): void
+    {
+        $baseline = $this->pdfY($topY + $boxHeight - $baseHeight * 0.22);
+        $cursor = $startX;
+        foreach ($line as $seg) {
+            if (isset($seg['image'])) {
+                $this->stream->image(
+                    $seg['image'],
+                    $cursor + $seg['mL'],
+                    $baseline + $seg['mB'],
+                    $seg['imgW'],
+                    $seg['imgH']
+                );
+            } else {
+                $fontKey = $this->writer->fontResourceKey($seg['font']);
+                $this->stream->text($cursor, $baseline, $seg['text'], $fontKey, $seg['size'], $seg['color']);
+            }
+            $cursor += $seg['width'];
+        }
+    }
+
+    /**
+     * Resolve an <img> into a line segment: load it, work out its final size
+     * (CSS/attribute size, else natural size at 96 dpi) and shrink it, keeping
+     * its aspect ratio, so it fits the available width and a full page.
+     * Returns null when the image can't be loaded.
+     */
+    private function imageSegment(Node $node, float $maxWidth): ?array
+    {
+        if ($this->images === null) {
+            return null;
+        }
+        $image = $this->images->load($node->attributes['src'] ?? '');
+        if ($image === null) {
+            return null;
+        }
+
+        $s = $node->style;
+        $ratio = $image->height / $image->width;
+
+        $w = $s->widthPercent !== null ? $maxWidth * $s->widthPercent / 100 : $s->width;
+        $h = $s->height;
+        if ($w === null && $h === null) {
+            $w = $image->width * 0.75; // 1px = 0.75pt
+            $h = $image->height * 0.75;
+        } elseif ($w === null) {
+            $w = $h / $ratio;
+        } elseif ($h === null) {
+            $h = $w * $ratio;
+        }
+
+        $availWidth = max(1.0, $maxWidth - $s->marginLeft - $s->marginRight);
+        if ($w > $availWidth) {
+            $h *= $availWidth / $w;
+            $w = $availWidth;
+        }
+
+        $availHeight = max(1.0, $this->pageHeight - $this->marginTop - $this->marginBottom - $s->marginTop - $s->marginBottom - 6);
+        if ($h > $availHeight) {
+            $w *= $availHeight / $h;
+            $h = $availHeight;
+        }
+
+        return [
+            'text' => '',
+            'width' => $w + $s->marginLeft + $s->marginRight,
+            'font' => '',
+            'size' => 0,
+            'color' => [0, 0, 0],
+            'image' => $this->writer->imageResourceKey($image),
+            'imgW' => $w,
+            'imgH' => $h,
+            'mL' => $s->marginLeft,
+            'mT' => $s->marginTop,
+            'mB' => $s->marginBottom,
+        ];
     }
 
     /**
      * Greedy word-wrap across possibly multiple styled runs.
      * @param Node[] $runs
-     * @return array<int,array<int,array{text:string,width:float,font:string,size:float,color:array}>>
+     * @return array<int,array<int,array>> lines of segments: text segments carry text/font/size/color,
+     *         image segments carry image/imgW/imgH/mL/mT/mB (plus the common width)
      */
     private function wrapRuns(array $runs, float $width): array
     {
@@ -351,6 +450,33 @@ class Engine
                 continue;
             }
 
+            if ($run->tag === 'img') {
+                $seg = $this->imageSegment($run, $width);
+                if ($seg !== null) {
+                    if ($currentLineWidth + $seg['width'] > $width && $currentLineWidth > 0) {
+                        if (!empty($currentLine) && !isset(end($currentLine)['image']) && trim(end($currentLine)['text']) === '') {
+                            $trailing = array_pop($currentLine);
+                            $currentLineWidth -= $trailing['width'];
+                        }
+                        $lines[] = $currentLine;
+                        $currentLine = [];
+                        $currentLineWidth = 0.0;
+                    }
+                    $currentLine[] = $seg;
+                    $currentLineWidth += $seg['width'];
+                    continue;
+                }
+
+                // Couldn't load it: fall back to the alt text, if any.
+                $alt = trim($run->attributes['alt'] ?? '');
+                if ($alt === '') {
+                    continue;
+                }
+                $altNode = new Node('#text', $run->style);
+                $altNode->text = $alt;
+                $run = $altNode;
+            }
+
             $font = $run->style->pdfFontName();
             $size = $run->style->fontSize;
             $color = $run->style->color;
@@ -365,7 +491,7 @@ class Engine
 
                 if (!$isSpace && $currentLineWidth + $w > $width && $currentLineWidth > 0) {
                     // Trim a single trailing space segment before wrapping
-                    if (!empty($currentLine) && trim(end($currentLine)['text']) === '') {
+                    if (!empty($currentLine) && !isset(end($currentLine)['image']) && trim(end($currentLine)['text']) === '') {
                         $trailing = array_pop($currentLine);
                         $currentLineWidth -= $trailing['width'];
                     }
@@ -495,7 +621,11 @@ class Engine
             $runs = $this->flattenInline($cell);
             $lines = $this->wrapRuns($runs, max(1, $innerWidth));
             $lineHeight = $cell->style->fontSize * $cell->style->lineHeight;
-            $cellHeight = max($lineHeight, count($lines) * $lineHeight) + $cell->style->paddingTop + $cell->style->paddingBottom;
+            $contentHeight = 0.0;
+            foreach ($lines as $line) {
+                $contentHeight += $this->lineBoxHeight($line, $lineHeight);
+            }
+            $cellHeight = max($lineHeight, $contentHeight) + $cell->style->paddingTop + $cell->style->paddingBottom;
 
             $cellLines[] = [
                 'cell' => $cell, 'x' => $cellX, 'width' => $cellWidth,
@@ -534,14 +664,9 @@ class Engine
                     'right' => $textX + max(0, $textWidth - $lineWidth),
                     default => $textX,
                 };
-                $cursor = $lineStartX;
-                $baselineY = $this->pdfY($ty + $c['lineHeight'] * 0.78);
-                foreach ($line as $seg) {
-                    $fontKey = $this->writer->fontResourceKey($seg['font']);
-                    $this->stream->text($cursor, $baselineY, $seg['text'], $fontKey, $seg['size'], $seg['color']);
-                    $cursor += $seg['width'];
-                }
-                $ty += $c['lineHeight'];
+                $boxHeight = $this->lineBoxHeight($line, $c['lineHeight']);
+                $this->drawLine($line, $lineStartX, $ty, $boxHeight, $c['lineHeight']);
+                $ty += $boxHeight;
             }
         }
 

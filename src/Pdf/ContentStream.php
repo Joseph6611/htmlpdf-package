@@ -83,6 +83,23 @@ class ContentStream
         }
     }
 
+    /**
+     * Paint an image XObject into the box whose bottom-left corner is ($x, $y)
+     * (PDF coordinates, y pointing up). The q/Q pair keeps the transform from
+     * leaking into the colour/line-width caches below.
+     */
+    public function image(string $key, float $x, float $y, float $w, float $h): void
+    {
+        $this->buf .= sprintf(
+            "q %s 0 0 %s %s %s cm /%s Do Q\n",
+            $this->writer->fmt($w),
+            $this->writer->fmt($h),
+            $this->writer->fmt($x),
+            $this->writer->fmt($y),
+            $key
+        );
+    }
+
     private function setFillColor(array $rgb): void
     {
         if ($this->currentFillColor === $rgb) {

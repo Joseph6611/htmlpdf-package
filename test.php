@@ -1,6 +1,8 @@
 <?php
 
 require __DIR__ . '/src/Font/Metrics.php';
+require __DIR__ . '/src/Image/Image.php';
+require __DIR__ . '/src/Image/ImageLoader.php';
 require __DIR__ . '/src/Pdf/Writer.php';
 require __DIR__ . '/src/Pdf/ContentStream.php';
 require __DIR__ . '/src/Html/Style.php';

@@ -9,6 +9,8 @@ use HtmlPdf\HtmlPdf;
  * @method static HtmlPdf loadHtml(string $html)
  * @method static HtmlPdf setPaper(string $size, string $orientation = 'portrait')
  * @method static HtmlPdf setMargins(float $top, float $right, float $bottom, float $left)
+ * @method static HtmlPdf setBasePath(?string $path)
+ * @method static HtmlPdf allowRemoteImages(bool $allow = true)
  */
 class HtmlPdfFacade extends Facade
 {
