@@ -35,6 +35,12 @@ class Style
     public ?float $widthPercent = null; // 0-100, resolved against container width at layout time
     public ?float $height = null; // points, or null = auto (currently only used by <img>)
 
+    public bool $underline = false;           // inherited
+    public string $verticalAlign = 'top';     // table cells: top, middle, bottom (not inherited)
+    public float $borderRadius = 0.0;         // rounded corners for box backgrounds (not inherited)
+    public bool $pageBreakBefore = false;     // not inherited
+    public bool $pageBreakAfter = false;      // not inherited
+
     public function clone(): self
     {
         return clone $this;
@@ -54,6 +60,10 @@ class Style
         $this->marginTop = $this->marginRight = $this->marginBottom = $this->marginLeft = 0;
         $this->paddingTop = $this->paddingRight = $this->paddingBottom = $this->paddingLeft = 0;
         $this->borderTop = $this->borderRight = $this->borderBottom = $this->borderLeft = false;
+        $this->verticalAlign = 'top';
+        $this->borderRadius = 0.0;
+        $this->pageBreakBefore = false;
+        $this->pageBreakAfter = false;
     }
 
     public function pdfFontName(): string

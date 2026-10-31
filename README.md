@@ -77,6 +77,46 @@ If any part of the HTML can come from users:
   endpoints). Other schemes (`php://`, `phar://`, `ftp://`) are always refused.
 - Files over 10 MB are refused.
 
+## Changes in 1.2
+
+New:
+- `text-decoration: underline` and `<u>`.
+- `vertical-align: middle | bottom` on table cells.
+- `border-radius` on boxes that have a `background-color`.
+- `page-break-before: always` / `page-break-after: always` (also `break-before/after: page`).
+- `margin-left` / `margin-right` on blocks and tables.
+- `HtmlPdf\Pdf\Assembler`: merge PDFs, stamp one PDF over another, count pages (uses `qpdf`).
+
+Fixed:
+- A cell no longer inherits the `width`, margins, padding, borders or background of its table / row /
+  parent. Before, `table { width: 100% }` made every cell 100% wide, so tables ran past the right margin and
+  right-aligned cells could fall off the page.
+- Rules written for `body { ... }` (font size, colour, family) are applied.
+- Exact character widths for every standard font (bold and italic included). The old bold estimate was off by
+  up to a space width, which glued words together ("Informationsgénérales").
+- A line is as tall as its tallest text, so a 20px title inside a 10px cell no longer overlaps itself.
+- `text-align` set on a `<div>` inside a `<td>` is honoured; blocks inside a cell start on their own line;
+  spaces at the start of a line are ignored.
+
+Upgrade notes: documents that relied on the old inheritance (e.g. a `<p>` inheriting its parent's border or
+background) will look different, and an empty `<div style="page-break-before: always">` now really breaks the page.
+
+## Assembling existing PDFs
+
+HtmlPdf only writes PDFs. To put an existing PDF *inside* your document (a scanned RCCM extract, a static
+terms-and-conditions file) or to stamp data on top of one, use `Assembler`; it calls `qpdf`
+(`sudo apt install qpdf`), which copies pages without re-encoding them:
+
+```php
+use HtmlPdf\Pdf\Assembler;
+
+$a = new Assembler();
+$a->merge(['letter.pdf', 'cgv.pdf', ['rccm.pdf', '1-z'], 'ifu.pdf'], 'dossier.pdf');   // in this order
+$a->overlay('cgv.pdf', 'stamp.pdf', 'cgv_signed.pdf', '4');                            // stamp on page 4 only
+$a->pageCount('cgv.pdf');
+$a->rasterize('scan.pdf', '/tmp', 130);   // fallback without qpdf: JPEG per page (needs poppler-utils), then use <img>
+```
+
 ## What it does NOT support (by design, to keep this maintainable)
 
 - Floats, absolute positioning, flexbox/grid.
@@ -153,6 +193,7 @@ block (package auto-discovery), same mechanism dompdf's Laravel wrapper uses.
 php test.php              # single-page letterhead + table sample
 php test_pagebreak.php    # 60-row table, verifies page breaks
 php test_images.php       # images: sizes, alignment, transparency, formats, tables
+php test_layout.php       # page breaks, underline, rounded boxes, inheritance, metrics
 ```
 
 Both write a `.pdf` you can open directly, or inspect with:

@@ -25,9 +25,10 @@ class Parser
         }
 
         $body = $dom->getElementsByTagName('body')->item(0) ?? $dom->documentElement;
-        $root = new Node('body', new Style());
+        $rootStyle = $body instanceof DOMElement ? $this->computeStyle($body, 'body', new Style()) : new Style();
+        $root = new Node('body', $rootStyle);
 
-        $this->walkChildren($body, $root, new Style());
+        $this->walkChildren($body, $root, $rootStyle);
 
         return $root;
     }
@@ -80,6 +81,7 @@ class Parser
     private function computeStyle(DOMElement $el, string $tag, Style $inherited): Style
     {
         $style = $inherited->clone();
+        $style->resetBox(); // width/margin/padding/border/background are not inherited in CSS
 
         // 1) Tag defaults
         $this->applyTagDefaults($tag, $style);
@@ -141,6 +143,7 @@ class Parser
                 $style->fontSize = 13; $style->bold = true; $style->marginTop = 8; $style->marginBottom = 5; break;
             case 'p': $style->marginTop = 0; $style->marginBottom = 8; break;
             case 'strong': case 'b': $style->bold = true; break;
+            case 'u': $style->underline = true; break;
             case 'em': case 'i': $style->italic = true; break;
             case 'table': $style->marginTop = 4; $style->marginBottom = 4; break;
             case 'th':
@@ -195,6 +198,25 @@ class Parser
                         $style->width = $this->toPt($val, 0) ?: null;
                         $style->widthPercent = null;
                     }
+                    break;
+                case 'text-decoration':
+                case 'text-decoration-line':
+                    $style->underline = str_contains(strtolower($val), 'underline');
+                    break;
+                case 'vertical-align':
+                    $v = strtolower(trim($val));
+                    $style->verticalAlign = in_array($v, ['middle', 'bottom'], true) ? $v : 'top';
+                    break;
+                case 'border-radius':
+                    $style->borderRadius = max(0.0, $this->toPt((string) strtok(trim($val), ' '), 0));
+                    break;
+                case 'page-break-before':
+                case 'break-before':
+                    $style->pageBreakBefore = in_array(strtolower(trim($val)), ['always', 'page', 'left', 'right'], true);
+                    break;
+                case 'page-break-after':
+                case 'break-after':
+                    $style->pageBreakAfter = in_array(strtolower(trim($val)), ['always', 'page', 'left', 'right'], true);
                     break;
                 case 'height':
                     $style->height = str_contains($val, '%') ? null : ($this->toPt($val, 0) ?: null);

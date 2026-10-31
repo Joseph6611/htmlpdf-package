@@ -15,6 +15,7 @@ class Engine
     private ?ContentStream $stream = null;
     private float $y = 0; // top-down cursor, 0 = top of content area
     private array $repeatingHeaderRows = []; // rows to redraw at top of a new page (table thead)
+    private bool $pendingBreak = false; // a page-break-after is waiting for the next content
 
     public function __construct(
         private Writer $writer,
@@ -66,6 +67,13 @@ class Engine
     private function layoutBlockChildren(Node $parent, float $x, float $width): void
     {
         foreach ($parent->children as $child) {
+            if ($this->pendingBreak || (!$child->isText() && $child->style->pageBreakBefore)) {
+                $this->pendingBreak = false;
+                if ($this->y > $this->marginTop + 0.5) {
+                    $this->newPage();
+                }
+            }
+
             if ($child->isText()) {
                 $this->layoutParagraphRun([$child], $x, $width);
                 continue;
@@ -73,7 +81,11 @@ class Engine
 
             switch ($child->tag) {
                 case 'table':
-                    $this->layoutTable($child, $x, $width);
+                    $this->layoutTable(
+                        $child,
+                        $x + $child->style->marginLeft,
+                        $width - $child->style->marginLeft - $child->style->marginRight
+                    );
                     break;
                 case 'hr':
                     $this->layoutHr($child, $x, $width);
@@ -90,12 +102,18 @@ class Engine
                     break;
                 default:
                     $this->y += $child->style->marginTop;
+                    $bx = $x + $child->style->marginLeft;
+                    $bw = $width - $child->style->marginLeft - $child->style->marginRight;
                     if ($this->isInlineOnly($child)) {
-                        $this->layoutBoxedInline($child, $x, $width);
+                        $this->layoutBoxedInline($child, $bx, $bw);
                     } else {
-                        $this->layoutBoxed($child, $x, $width);
+                        $this->layoutBoxed($child, $bx, $bw);
                     }
                     $this->y += $child->style->marginBottom;
+            }
+
+            if ($child->style->pageBreakAfter) {
+                $this->pendingBreak = true;
             }
         }
     }
@@ -103,7 +121,7 @@ class Engine
     private function isInlineOnly(Node $node): bool
     {
         foreach ($node->children as $c) {
-            if (!$c->isText() && !in_array($c->tag, ['strong', 'b', 'em', 'i', 'span', 'br', 'img'], true)) {
+            if (!$c->isText() && !in_array($c->tag, ['strong', 'b', 'em', 'i', 'u', 'span', 'br', 'img'], true)) {
                 return false;
             }
         }
@@ -114,7 +132,17 @@ class Engine
     private function flattenInline(Node $node): array
     {
         $runs = [];
+        $needBreak = false;
         foreach ($node->children as $c) {
+            if ($needBreak || ($c->isBlock() && !$c->isText())) {
+                if (!empty($runs) && end($runs)->tag !== 'br') {
+                    $runs[] = new Node('br', $node->style);
+                }
+                $needBreak = false;
+            }
+            if (!$c->isText() && $c->isBlock()) {
+                $needBreak = true;
+            }
             if ($c->isText()) {
                 $t = clone $c;
                 $t->style = $node->style->clone();
@@ -200,15 +228,22 @@ class Engine
         if ($style->backgroundColor !== null) {
             [$r, $g, $b] = $style->backgroundColor;
             $ops .= sprintf(
-                "%s %s %s rg\n%s %s %s %s re f\n",
+                "%s %s %s rg\n",
                 $this->writer->fmt(max(0, min(255, $r)) / 255),
                 $this->writer->fmt(max(0, min(255, $g)) / 255),
-                $this->writer->fmt(max(0, min(255, $b)) / 255),
-                $this->writer->fmt($x),
-                $this->writer->fmt($pdfBottom),
-                $this->writer->fmt($width),
-                $this->writer->fmt($height)
+                $this->writer->fmt(max(0, min(255, $b)) / 255)
             );
+            if ($style->borderRadius > 0) {
+                $ops .= $this->roundedRectPath($x, $pdfBottom, $width, $height, $style->borderRadius) . "f\n";
+            } else {
+                $ops .= sprintf(
+                    "%s %s %s %s re f\n",
+                    $this->writer->fmt($x),
+                    $this->writer->fmt($pdfBottom),
+                    $this->writer->fmt($width),
+                    $this->writer->fmt($height)
+                );
+            }
         }
 
         if ($this->hasBorder($style)) {
@@ -217,6 +252,29 @@ class Engine
 
         $streamBefore->insertAt($mark, $ops);
         $streamBefore->invalidateColorCache();
+    }
+
+    /** Closed rounded-rectangle path (Bezier corners), without the paint operator. */
+    private function roundedRectPath(float $x, float $y, float $w, float $h, float $r): string
+    {
+        $r = max(0.0, min($r, $w / 2, $h / 2));
+        $k = $r * 0.5523;
+        $f = fn (float $n) => $this->writer->fmt($n);
+        $x2 = $x + $w;
+        $y2 = $y + $h;
+
+        return sprintf(
+            "%s %s m %s %s l %s %s %s %s %s %s c %s %s l %s %s %s %s %s %s c %s %s l %s %s %s %s %s %s c %s %s l %s %s %s %s %s %s c h\n",
+            $f($x + $r), $f($y),
+            $f($x2 - $r), $f($y),
+            $f($x2 - $r + $k), $f($y), $f($x2), $f($y + $r - $k), $f($x2), $f($y + $r),
+            $f($x2), $f($y2 - $r),
+            $f($x2), $f($y2 - $r + $k), $f($x2 - $r + $k), $f($y2), $f($x2 - $r), $f($y2),
+            $f($x + $r), $f($y2),
+            $f($x + $r - $k), $f($y2), $f($x), $f($y2 - $r + $k), $f($x), $f($y2 - $r),
+            $f($x), $f($y + $r),
+            $f($x), $f($y + $r - $k), $f($x + $r - $k), $f($y), $f($x + $r), $f($y)
+        );
     }
 
     private function buildBorderOps(Style $style, float $x, float $topY, float $width, float $height): string
@@ -319,7 +377,8 @@ class Engine
         $align = $blockStyle->textAlign ?? ($runs[0]->style->textAlign ?? 'left');
 
         foreach ($lines as $line) {
-            $boxHeight = $this->lineBoxHeight($line, $lineHeight);
+            $base = $this->lineBase($line, $lineHeight);
+            $boxHeight = $this->lineBoxHeight($line, $base);
             $this->ensureSpace($boxHeight);
             $lineWidth = array_sum(array_map(fn ($seg) => $seg['width'], $line));
             $startX = match ($align) {
@@ -328,9 +387,24 @@ class Engine
                 default => $x,
             };
 
-            $this->drawLine($line, $startX, $this->y, $boxHeight, $lineHeight);
+            $this->drawLine($line, $startX, $this->y, $boxHeight, $base);
             $this->y += $boxHeight;
         }
+    }
+
+    /**
+     * Base line height of a line: the block's own line height (CSS "strut"), or
+     * more when the line holds larger text, e.g. a 20px title inside a 10px cell.
+     */
+    private function lineBase(array $line, float $blockLineHeight): float
+    {
+        $base = $blockLineHeight;
+        foreach ($line as $seg) {
+            if (!isset($seg['image'])) {
+                $base = max($base, $seg['size'] * ($seg['lh'] ?? 1.35));
+            }
+        }
+        return $base;
     }
 
     /**
@@ -367,6 +441,16 @@ class Engine
             } else {
                 $fontKey = $this->writer->fontResourceKey($seg['font']);
                 $this->stream->text($cursor, $baseline, $seg['text'], $fontKey, $seg['size'], $seg['color']);
+                if (!empty($seg['ul'])) {
+                    $this->stream->line(
+                        $cursor,
+                        $baseline - $seg['size'] * 0.12,
+                        $cursor + $seg['width'],
+                        $baseline - $seg['size'] * 0.12,
+                        $seg['color'],
+                        max(0.4, $seg['size'] * 0.06)
+                    );
+                }
             }
             $cursor += $seg['width'];
         }
@@ -489,6 +573,10 @@ class Engine
                 $w = Metrics::stringWidth($font, $word, $size);
                 $isSpace = trim($word) === '';
 
+                if ($isSpace && $currentLineWidth == 0.0) {
+                    continue; // collapse whitespace at the start of a line, as browsers do
+                }
+
                 if (!$isSpace && $currentLineWidth + $w > $width && $currentLineWidth > 0) {
                     // Trim a single trailing space segment before wrapping
                     if (!empty($currentLine) && !isset(end($currentLine)['image']) && trim(end($currentLine)['text']) === '') {
@@ -500,7 +588,10 @@ class Engine
                     $currentLineWidth = 0.0;
                 }
 
-                $currentLine[] = ['text' => $word, 'width' => $w, 'font' => $font, 'size' => $size, 'color' => $color];
+                $currentLine[] = [
+                    'text' => $word, 'width' => $w, 'font' => $font, 'size' => $size, 'color' => $color,
+                    'lh' => $run->style->lineHeight, 'ul' => $run->style->underline,
+                ];
                 $currentLineWidth += $w;
             }
         }
@@ -623,13 +714,16 @@ class Engine
             $lineHeight = $cell->style->fontSize * $cell->style->lineHeight;
             $contentHeight = 0.0;
             foreach ($lines as $line) {
-                $contentHeight += $this->lineBoxHeight($line, $lineHeight);
+                $contentHeight += $this->lineBoxHeight($line, $this->lineBase($line, $lineHeight));
             }
             $cellHeight = max($lineHeight, $contentHeight) + $cell->style->paddingTop + $cell->style->paddingBottom;
 
             $cellLines[] = [
                 'cell' => $cell, 'x' => $cellX, 'width' => $cellWidth,
                 'lines' => $lines, 'lineHeight' => $lineHeight, 'height' => $cellHeight,
+                'contentHeight' => $contentHeight,
+                // text-align comes from the first run: a <div style="text-align:center"> inside a cell wins
+                'align' => $runs[0]->style->textAlign ?? $cell->style->textAlign,
             ];
             $cellX += $cellWidth;
             $ci += $span;
@@ -657,15 +751,23 @@ class Engine
             $textWidth = $c['width'] - $style->paddingLeft - $style->paddingRight;
             $ty = $rowTop + $style->paddingTop;
 
+            $free = $rowHeight - $c['height'];
+            if ($free > 0 && $style->verticalAlign === 'middle') {
+                $ty += $free / 2;
+            } elseif ($free > 0 && $style->verticalAlign === 'bottom') {
+                $ty += $free;
+            }
+
             foreach ($c['lines'] as $line) {
                 $lineWidth = array_sum(array_map(fn ($seg) => $seg['width'], $line));
-                $lineStartX = match ($style->textAlign) {
+                $lineStartX = match ($c['align']) {
                     'center' => $textX + max(0, ($textWidth - $lineWidth) / 2),
                     'right' => $textX + max(0, $textWidth - $lineWidth),
                     default => $textX,
                 };
-                $boxHeight = $this->lineBoxHeight($line, $c['lineHeight']);
-                $this->drawLine($line, $lineStartX, $ty, $boxHeight, $c['lineHeight']);
+                $base = $this->lineBase($line, $c['lineHeight']);
+                $boxHeight = $this->lineBoxHeight($line, $base);
+                $this->drawLine($line, $lineStartX, $ty, $boxHeight, $base);
                 $ty += $boxHeight;
             }
         }
